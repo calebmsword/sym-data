@@ -3,16 +3,20 @@ import jsdom from "jsdom";
 
 const { JSDOM } = jsdom;
 
+export const symData = {};
+
 /**
  * Removes undesirable noise surrounding a string.
  * Currently, this removes any "°" in the string and plucks the first nonempty
  * word if the string has any spaces. If the latter is undesirable, the second
  * optional configuration object can deactivate this behavior.
+ * The string will be coverted into a number unless the optional configuration
+ * object indicates otherwise.
  * @param {string} string
- * @param {{ keepSpaces: boolean }} [opts]
- * @returns {string|undefined}
+ * @param {{ keepSpaces: boolean, asNumber: boolean }} [opts]
+ * @returns {string|number|undefined}
  */
-const prune = (string, { keepSpaces } = {}) => {
+const prune = (string, { keepSpaces, asNumber } = {}) => {
   if (typeof string !== "string") return;
 
   if (!keepSpaces) {
@@ -29,7 +33,7 @@ const prune = (string, { keepSpaces } = {}) => {
     string = string.replaceAll(badCharacter, "");
   });
 
-  return string;
+  return asNumber === false ? string : Number(string);
 };
 
 // read the HTML file
@@ -41,8 +45,6 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
 
   const { document } = new JSDOM(data).window;
 
-  const symData = {};
-
   // iterate over all weapon classes (assault, medic, support, scout, sidearm,
   // misc)
   const weaponClasses = document.querySelectorAll(".sortableTable");
@@ -51,14 +53,15 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
     const weapons = weaponClasses[classIndex].children;
     for (let weaponIndex = 0; weaponIndex < weapons.length; weaponIndex++) {
       /**
-       * Finds a descendent element by classname and gets its text context.
+       * Finds a descendent element by classname and gets its text context as
+       * a number or string.
        * @param {string} className
        * The class of the element to find.
-       * @param {{ keepSpaces: boolean }} opts
+       * @param {{ keepSpaces: boolean, asString: boolean }} opts
        * Configuration object to pass to {@link prune}.
-       * @returns {string|undefined}
+       * @returns {number|string|undefined}
        */
-      const getText = (className, opts) => {
+      const getValue = (className, opts) => {
         return prune(
           weapons[weaponIndex]
             ?.querySelector("." + className)
@@ -87,8 +90,12 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
 
       // create the nested object that will represent this weapon and assign it
       // to symData
-      const weapon = {};
-      symData[getText("lblWeaponNameValue", { keepSpaces: true })] = weapon;
+      const weaponData = {};
+      const weaponName = getValue("lblWeaponNameValue", {
+        keepSpaces: true,
+        asNumber: false
+      });
+      symData[weaponName] = weaponData;
 
       /**
        * Creates a function which gets a spread value from tabulated data and
@@ -107,13 +114,32 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
         return (property, className) => {
           if (dynamicCol && row % 3 !== 1) col--;
 
-          weapon[property] = prune(
+          weaponData[property] = prune(
             getFirst(className)
               ?.querySelectorAll("tr")[row]
               ?.children[col]
               ?.textContent,
           );
         };
+      };
+
+      /**
+       * Creates a function which finds the first shot spread multiplier based
+       * on information from tabulated data.
+       * @param {number} row 
+       * @param {number} col 
+       * @returns {(property: string, className: string) => void}
+       */
+      const getFssm = (row, col) => {
+        return (property, className) => {
+          getSpread(row, col)(property, className);
+          const firstSips = Number(weaponData[property]);
+          const sips = Number(weaponData.adsStandSpreadInc);
+
+          weaponData[property] = Number(sips === 0
+            ? sips
+            : (firstSips / sips).toFixed(0));
+        }
       };
 
       // iterate over all meaningful data for this weapon.
@@ -132,7 +158,7 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
             const label = labels[labelIndex];
 
             if (label.textContent.includes("pellets")) {
-              weapon[property] = prune(label?.textContent);
+              weaponData[property] = prune(label?.textContent);
               break;
             }
           }
@@ -144,14 +170,14 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
         ["deployTime", "lblDeployTime"],
         ["verticalRecoil", "recoilInitUpValue"],
         ["horizontalRecoil", "recoilHorValue", (property, className) => {
-          const number = getText(className);
-          weapon[property] = String(Math.abs(Number(number)));
+          const number = getValue(className);
+          weaponData[property] = Math.abs(Number(number));
         }],
         [
           "recoilFirstShotMultiplier",
           "recoilFirstShot",
           (property, className) => {
-            weapon[property] = prune(
+            weaponData[property] = prune(
               getFirst(className)
                 ?.children[1]
                 ?.textContent,
@@ -174,32 +200,8 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
         ["hipProneBaseMax", "spreadTable", getSpread(6, 2)],
         ["adsStandSpreadInc", "spreadIncDecTable", getSpread(2, 1, false)],
         ["hipStandSpreadInc", "spreadIncDecTable", getSpread(2, 2, false)],
-        [
-          "adsStandFirstSpreadMul",
-          "spreadIncDecTable",
-          (property, className) => {
-            getSpread(1, 1)(property, className);
-            const firstSips = Number(weapon[property]);
-            const sips = Number(weapon.adsStandSpreadInc);
-
-            weapon[property] = sips === 0
-              ? sips
-              : (firstSips / sips).toFixed(0);
-          },
-        ],
-        [
-          "hipStandFirstSpreadMul",
-          "spreadIncDecTable",
-          (property, className) => {
-            getSpread(1, 2)(property, className);
-            const firstSips = Number(weapon[property]);
-            const sips = Number(weapon.hipStandSpreadInc);
-
-            weapon[property] = sips === 0
-              ? sips
-              : (firstSips / sips).toFixed(0);
-          },
-        ],
+        ["adsStandFirstSpreadMul", "spreadIncDecTable", getFssm(1, 1)],
+        ["hipStandFirstSpreadMul", "spreadIncDecTable", getFssm(1, 2)],
         ["adsStandSpreadDec", "spreadIncDecTable", getSpread(3, 1, false)],
         ["hipStandSpreadDec", "spreadIncDecTable", getSpread(3, 2, false)],
       ].forEach(([property, className, customBehavior]) => {
@@ -210,11 +212,11 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
         }
 
         // if there is no value to save, don't add it to symData
-        const value = getText(className);
+        const value = getValue(className);
         if (value === undefined) return;
 
         // assign the value to symData
-        weapon[property] = value;
+        weaponData[property] = value;
       });
     }
   }
