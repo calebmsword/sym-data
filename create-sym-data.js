@@ -1,40 +1,10 @@
 import fs from "node:fs";
 import jsdom from "jsdom";
+import { prettifySymData, prune, write } from "./utils.js";
 
 const { JSDOM } = jsdom;
 
 export const symData = {};
-
-/**
- * Removes undesirable noise surrounding a string.
- * Currently, this removes any "°" in the string and plucks the first nonempty
- * word if the string has any spaces. If the latter is undesirable, the second
- * optional configuration object can deactivate this behavior.
- * The string will be coverted into a number unless the optional configuration
- * object indicates otherwise.
- * @param {string} string
- * @param {{ keepSpaces: boolean, asNumber: boolean }} [opts]
- * @returns {string|number|undefined}
- */
-const prune = (string, { keepSpaces, asNumber } = {}) => {
-  if (typeof string !== "string") return;
-
-  if (!keepSpaces) {
-    string = (() => {
-      const strings = string.split(" ");
-      for (const candidate of strings) {
-        if (candidate.length !== 0) return candidate;
-      }
-      return string;
-    })();
-  }
-
-  ["°"].forEach((badCharacter) => {
-    string = string.replaceAll(badCharacter, "");
-  });
-
-  return asNumber === false ? string : Number(string);
-};
 
 // read the HTML file
 fs.readFile("./Sym.html", "utf8", (error, data) => {
@@ -53,8 +23,8 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
     const weapons = weaponClasses[classIndex].children;
     for (let weaponIndex = 0; weaponIndex < weapons.length; weaponIndex++) {
       /**
-       * Finds a descendent element by classname and gets its text context as
-       * a number or string.
+       * Finds a descendent element by classname and gets its pruned text
+       * context as a number or string.
        * @param {string} className
        * The class of the element to find.
        * @param {{ keepSpaces: boolean, asString: boolean }} opts
@@ -65,6 +35,25 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
         return prune(
           weapons[weaponIndex]
             ?.querySelector("." + className)
+            ?.textContent,
+          opts,
+        );
+      };
+
+      /**
+       * Finds a descendent element by classname, finds the next siblings, and
+       * gets its pruned text context as a number or string.
+       * @param {string} className
+       * The class of the element to find.
+       * @param {{ keepSpaces: boolean, asString: boolean }} opts
+       * Configuration object to pass to {@link prune}.
+       * @returns {number|string|undefined}
+       */
+      const getValueOfSibling = (className, opts) => {
+        return prune(
+          weapons[weaponIndex]
+            ?.querySelector("." + className)
+            ?.nextSibling
             ?.textContent,
           opts,
         );
@@ -93,7 +82,7 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
       const weaponData = {};
       const weaponName = getValue("lblWeaponNameValue", {
         keepSpaces: true,
-        asNumber: false
+        asNumber: false,
       });
       symData[weaponName] = weaponData;
 
@@ -126,8 +115,8 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
       /**
        * Creates a function which finds the first shot spread multiplier based
        * on information from tabulated data.
-       * @param {number} row 
-       * @param {number} col 
+       * @param {number} row
+       * @param {number} col
        * @returns {(property: string, className: string) => void}
        */
       const getFssm = (row, col) => {
@@ -136,10 +125,10 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
           const firstSips = Number(weaponData[property]);
           const sips = Number(weaponData.adsStandSpreadInc);
 
-          weaponData[property] = Number(sips === 0
-            ? sips
-            : (firstSips / sips).toFixed(0));
-        }
+          weaponData[property] = Number(
+            sips === 0 ? sips : (firstSips / sips).toFixed(0),
+          );
+        };
       };
 
       // iterate over all meaningful data for this weapon.
@@ -169,9 +158,13 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
         ["reloadTimeEmpty", "lblReloadEmpty"],
         ["deployTime", "lblDeployTime"],
         ["verticalRecoil", "recoilInitUpValue"],
-        ["horizontalRecoil", "recoilHorValue", (property, className) => {
+        ["recoilLeft", "recoilHorValue", (property, className) => {
           const number = getValue(className);
-          weaponData[property] = Math.abs(Number(number));
+          weaponData[property] = Math.abs(number);
+        }],
+        ["recoilRight", "recoilHorValue", (property, className) => {
+          const number = getValueOfSibling(className);
+          weaponData[property] = Math.abs(number);
         }],
         [
           "recoilFirstShotMultiplier",
@@ -221,12 +214,6 @@ fs.readFile("./Sym.html", "utf8", (error, data) => {
     }
   }
 
-  fs.writeFile("./sym-data.json", JSON.stringify(symData), (error) => {
-    if (error) {
-      console.log(error);
-      return;
-    }
-
-    console.log("sym-data.json created.");
-  });
+  write("./sym-data.json", JSON.stringify(symData));
+  write("./sym-data-pretty.json", prettifySymData(symData));
 });
