@@ -59,17 +59,66 @@ export const prettifySymData = (symData) => {
 };
 
 /**
- * Write the content to the given file name.
- * @param {string} filename
- * @param {string} contents
+ * Wraps a node-style asychronous function in a promise.
+ * 
+ * @template T
+ * The type of data the node-style callback retrieves if successful.
+ * 
+ * @param {(error: unknown, data: T) => void} nodejsAsync
+ * Any async function parameterized by a node-style async callback.
+ * @returns {Promise<T>}
+ * A promise that resolves with the result of the node-style asynchronous
+ * function.
  */
-export const write = (filename, content) => {
-  fs.writeFile(filename, content, (error) => {
-    if (error) {
-      console.log(error);
-      return;
-    }
-
-    console.log(`${filename} created.`);
+const promisify = (nodejsAsync) => {
+  return new Promise((resolve, reject) => {
+    nodejsAsync((error, data) => {
+      error === null ? resolve(data) : reject(error);
+    });
   });
+}
+
+/**
+ * Asynchronously creates a string representation of the contents of a file.
+ * @param {string} filename
+ * The name of the file to read. Provide either an absolute path or a path
+ * relative to the current working directory.
+ * @returns Promise<string>
+ */
+export const read = (filename) => {
+  return promisify((nodeCallback) => {
+    fs.readFile(filename, "utf8", nodeCallback);
+  });
+};
+
+/**
+ * Asynchronously writes to a given file.
+ * @param {string} filename
+ * The name of the file that will be written to. Provide either an absolute path
+ * or a path relative to the current working directory.
+ * @param {string} content
+ * A string representing the file to write.
+ * @returns 
+ */
+export const write = async (filename, content) => {
+  await promisify((nodeCallback) => {
+    fs.writeFile(filename, content, nodeCallback);
+  });
+  console.log(`Created ${filename}`);
+};
+
+/**
+ * A simple wrapper around Promise.all.
+ * 
+ * All arguments are wrapped in a `Promise.resolve` meaning Promises/A+
+ * compliant implementations will work seamlessly with this function.
+ * 
+ * @param  {...any} args
+ * Every argument is passed to `Promise.all`. 
+ * @returns Promise<any[]>
+ */
+export const parallel = (...args) => {
+  return Promise.all(args.map((x) => {
+    return Promise.resolve(x);
+  }));
 };
